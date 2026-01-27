@@ -1,0 +1,16 @@
+{
+  "id": "crimson_gift",
+  "name": "Crimson's Gift",
+  "display_name": "Crimson's Gift",
+  "author": ["Liafonx"],
+  "description": "Restores the Crimson Heart hand size bug as an intentional feature.",
+  "prefix": "crimson_gift",
+  "main_file": "main.lua",
+  "priority": 10,
+  "badge_colour": "cc3333",
+  "badge_text_colour": "ffffff",
+  "version": "1.0.0",
+  "dependencies": [
+    "Steamodded(>=1.0.0~BETA-1221a)"
+  ]
+}

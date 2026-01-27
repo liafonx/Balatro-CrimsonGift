@@ -1,0 +1,36 @@
+[manifest]
+version = "1.0"
+priority = 10
+
+# CrimsonGift - Restores the Crimson Heart hand size bug
+# This mod restores the bug where disabling/re-enabling jokers with hand_size
+# via Crimson Heart causes permanent hand size increases.
+
+# Hand limit display: point the UI at our display-specific ref values.
+# This lets us show "9/9+1" while the real limit may be 8 until the hand resolves.
+
+# Vanilla-style display (ref_table = self.config, ref_value = 'card_limit')
+[[patches]]
+[patches.pattern]
+target = "cardarea.lua"
+match_indent = true
+position = "at"
+pattern = '''
+{n=G.UIT.T, config={ref_table = self.config, ref_value = 'card_limit', scale = 0.3, colour = G.C.WHITE}},
+'''
+payload = '''
+{n=G.UIT.T, config={ref_table = self.config, ref_value = 'crimson_gift_display_limit', scale = 0.3, colour = G.C.WHITE}},
+'''
+
+# SMODS-style display (ref_table = self.config.card_limits, ref_value = 'total_slots')
+[[patches]]
+[patches.pattern]
+target = "cardarea.lua"
+match_indent = true
+position = "at"
+pattern = '''
+{n=G.UIT.T, config={ref_table = self.config.card_limits, ref_value = 'total_slots', scale = 0.3, colour = G.C.WHITE}},
+'''
+payload = '''
+{n=G.UIT.T, config={ref_table = self.config.card_limits, ref_value = 'crimson_gift_display_total_slots', scale = 0.3, colour = G.C.WHITE}},
+'''
