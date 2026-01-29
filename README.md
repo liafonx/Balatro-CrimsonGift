@@ -10,33 +10,67 @@ SMODS `1.0.0~BETA-1221a` and later fixed the vanilla Crimson Heart hand-size bug
 
 ## How It Works
 
-- Disabling a hand-size Joker grants a **pending +N**
-- The increase is applied **after play another hand**
-- **If that hand defeats the boss, the gift is lost**
+- Disabling a hand-size Joker **preserves** the hand size (no drop)
+- When a non-hand-size Joker is disabled, the gift is **applied immediately**
+- Multiple hand-size Jokers disabled in sequence → keep the **largest** bonus
+- **If the boss is defeated while gift is pending**, special rules apply (see below)
+
+## Gift Application
+
+| Scenario | Result |
+|----------|--------|
+| h_size Joker disabled → non-h_size Joker disabled | Gift applied immediately |
+| Single h_size disabled → boss defeated by next play | Gift **lost** |
+| Multiple h_size disabled → boss defeated by next play | Keep **largest** (excluding last) |
 
 ## Example
 
-1. You have Juggler (+1 hand size) → hand size is `9/9`
-2. Crimson Heart disables Juggler → display becomes `9/9` (normaly should be 9/8)
-3. You finish the hand → permanent hand size becomes `10/10`
-4. If that same hand defeats the boss → the gift is **lost**
+1. You have Troubadour (+2 hand size) → hand size is `10/10` (base 8 + Troubadour 2)
+2. Crimson Heart disables Troubadour → display stays `10/10` (preserved)
+3. Next cycle: Fortune Teller (no h_size) disabled → gift +2 applied
+4. Hand size stays `12/12` (base 8 + Troubadour 2 + gift 2)
+5. If you sell Troubadour later → hand size becomes `10/10` (base 8 + gift 2)
 
-## Requirements&Compatibility
+**Note:** The gift is a permanent bonus separate from the joker. The disabled joker still contributes its hand size until sold.
 
-- **SMODS and Lovely is required** (no vanilla support)
+### Boss Defeat Scenarios
+
+**Single disable:**
+1. Troubadour (+2) disabled → pending +2
+2. You defeat the boss on this hand → gift **lost**, stays `10/10`
+
+**Multiple disables:**
+1. Troubadour (+2) disabled → pending +2
+2. Juggler (+1) disabled → pending +1, max_excluding_last = +2
+3. You defeat the boss → keep +2, hand size becomes `12/12`
+
+## Requirements & Compatibility
+
+- **SMODS and Lovely required** (no vanilla support)
 - **Minimum SMODS version:** `1.0.0~BETA-1221a`
-- ✅ Compatible with other hand-size mods (does not overwrite SMODS logic)
-- ❌ Vanilla-only (If Balatro fixes bug in later veriion, compatibility will be taken into consideration.)
+- Compatible with other hand-size mods (does not overwrite SMODS logic)
+- Compatible with Save Rewinder (state persists correctly)
 
 ## Installation
-2. Download and extract the [latest release](https://github.com/Liafonx/Balatro-CrimsonGift/releases) — it contains a `CrimsonGift` folder
-1. Copy the `CrimsonGift` folder into your Balatro `Mods` directory
-2. Launch Balatro
+
+1. Download and extract the [latest release](https://github.com/Liafonx/Balatro-CrimsonGift/releases) — it contains a `CrimsonGift` folder
+2. Copy the `CrimsonGift` folder into your Balatro `Mods` directory
+3. Launch Balatro
 
 ## Languages
 
 - English
 - 简体中文 (Simplified Chinese)
+
+## Notifications
+
+| Event | Message |
+|-------|---------|
+| First h_size disabled | "Crimson's Gift is arriving, hand size +N" |
+| Consecutive h_size disabled | "Consecutive bonuses: keeping hand size +N" |
+| Gift applied | "Crimson's Gift applied, hand size +N" |
+| Boss defeated (single) | "Crimson Heart defeated, gift lost" |
+| Boss defeated (multiple) | "Boss defeated: keeping hand size +N" |
 
 ## Strategy Tips
 
