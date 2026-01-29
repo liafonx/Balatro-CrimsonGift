@@ -14,17 +14,16 @@ CRIMSON_GIFT.permanent_hand_size_increase = 0
 -- Track if we're currently processing a Crimson Heart disable cycle
 CRIMSON_GIFT.processing_crimson_heart = false
 
--- Track the last disabled joker's hand_size status
--- Only grant permanent increase when a hand_size joker is disabled after a non-hand_size joker
-CRIMSON_GIFT.last_disabled_h_size = 0
+-- Track h_size from the joker disabled THIS cycle by Crimson Heart
+-- Reset at each cycle start since Crimson Heart alternates which joker it disables
+CRIMSON_GIFT.preserved_h_size_from_disabled = 0
 
--- Track pending hand size increase (will be applied after next hand is played)
--- Only applied if boss is not defeated in that hand
-CRIMSON_GIFT.pending_hand_size_increase = 0
+-- Track max h_size seen across previous cycles (for "keep largest" gift on boss defeat)
+CRIMSON_GIFT.max_h_size_excluding_last = 0
 
--- Track which jokers have already been processed in the current disable cycle
--- Prevents multiple additions from the same disable event
-CRIMSON_GIFT.processed_jokers_this_cycle = {}
+-- Track whether we've seen the first h_size joker in the current chain
+-- Used to show "arriving" for first, "keep_larger" for subsequent
+CRIMSON_GIFT.first_h_size_in_chain = true
 
 -- Monotonic counter used to invalidate older deferred events
 CRIMSON_GIFT.apply_sequence = 0
@@ -46,6 +45,8 @@ if CRIMSON_GIFT.config.debug_logs == nil then
     CRIMSON_GIFT.config.debug_logs = false
 end
 CRIMSON_GIFT.mod.config = CRIMSON_GIFT.config
+
+CRIMSON_GIFT.debug_last = CRIMSON_GIFT.debug_last or {}
 
 CRIMSON_GIFT.log_tags = {
     warn = true,
@@ -120,35 +121,37 @@ local function sync_base_tracking()
     if not G.hand.config.crimson_gift_original_base then
         G.hand.config.crimson_gift_original_base = G.GAME.starting_params.hand_size
     end
-    G.hand.config.crimson_gift_base_with_permanent =
-        (G.hand.config.crimson_gift_original_base or G.GAME.starting_params.hand_size) +
-        (CRIMSON_GIFT.permanent_hand_size_increase or 0)
 end
 
 -- Keep UI-only display limits in sync without mutating SMODS' real limit math.
 local function sync_display_limit()
     if not (G and G.hand and G.hand.config) then return end
 
-    local pending = CRIMSON_GIFT.pending_hand_size_increase or 0
-
+    -- In SMODS mode with h_size preservation, display equals actual limit
+    -- (hand size never drops, so no compensation needed)
     if G.hand.config.card_limits then
         local limits = G.hand.config.card_limits
         local total_slots = limits.total_slots
             or (limits.extra_slots or 0) + (limits.base or 0) + (limits.mod or 0) + (limits.crimson_gift_mod or 0)
         local effective_limit = total_slots - (limits.extra_slots_used or 0)
 
-        -- SMODS UI ref value (patched in lovely.toml)
-        limits.crimson_gift_display_total_slots = total_slots + pending
-
-        -- Vanilla-style UI ref value (also patched)
-        G.hand.config.crimson_gift_display_limit = effective_limit + pending
+        -- Display refs now equal real values (no compensation needed)
+        limits.crimson_gift_display_total_slots = total_slots
+        G.hand.config.crimson_gift_display_limit = effective_limit
     else
         local limit = G.hand.config.card_limit or G.hand.config.real_card_limit or 0
-        G.hand.config.crimson_gift_display_limit = limit + pending
+        G.hand.config.crimson_gift_display_limit = limit
     end
 end
 
 CRIMSON_GIFT.sync_display_limit = sync_display_limit
+
+-- Reset chain state (used after chain finalized or boss defeated)
+local function reset_chain_state()
+    CRIMSON_GIFT.preserved_h_size_from_disabled = 0
+    CRIMSON_GIFT.max_h_size_excluding_last = 0
+    CRIMSON_GIFT.first_h_size_in_chain = true
+end
 
 -- Persist Crimson Gift state into the run save table (G.GAME).
 local function sync_persistent_state()
@@ -156,8 +159,9 @@ local function sync_persistent_state()
     G.GAME.crimson_gift = G.GAME.crimson_gift or {}
     local saved = G.GAME.crimson_gift
     saved.permanent = CRIMSON_GIFT.permanent_hand_size_increase or 0
-    saved.pending = CRIMSON_GIFT.pending_hand_size_increase or 0
-    saved.last_disabled_h_size = CRIMSON_GIFT.last_disabled_h_size or 0
+    saved.preserved_h_size = CRIMSON_GIFT.preserved_h_size_from_disabled or 0
+    saved.max_h_size_excluding_last = CRIMSON_GIFT.max_h_size_excluding_last or 0
+    saved.first_h_size_in_chain = CRIMSON_GIFT.first_h_size_in_chain
     saved.original_base = (G.hand and G.hand.config and G.hand.config.crimson_gift_original_base) or saved.original_base
     saved.using_smods = CRIMSON_GIFT.using_smods or false
 end
@@ -167,42 +171,13 @@ local function restore_persistent_state()
     if not (G and G.GAME and G.GAME.crimson_gift) then return end
     local saved = G.GAME.crimson_gift
     CRIMSON_GIFT.permanent_hand_size_increase = saved.permanent or 0
-    CRIMSON_GIFT.pending_hand_size_increase = saved.pending or 0
-    CRIMSON_GIFT.last_disabled_h_size = saved.last_disabled_h_size or 0
+    CRIMSON_GIFT.preserved_h_size_from_disabled = saved.preserved_h_size or 0
+    CRIMSON_GIFT.max_h_size_excluding_last = saved.max_h_size_excluding_last or 0
+    CRIMSON_GIFT.first_h_size_in_chain = saved.first_h_size_in_chain ~= false
     CRIMSON_GIFT.using_smods = saved.using_smods or CRIMSON_GIFT.using_smods
 
     if G.hand and G.hand.config and saved.original_base then
         G.hand.config.crimson_gift_original_base = saved.original_base
-    end
-end
-
--- Draw cards up to the given target limit without modifying the limit again
-local function draw_missing_cards(target_limit)
-    if not (G and G.hand and G.deck and target_limit) then return end
-    if not draw_card then
-        log("warn", "CrimsonGift: draw_card is unavailable; cannot fill to new hand limit")
-        return
-    end
-
-    local current_cards = #G.hand.cards
-    local limit = math.max(0, math.floor(target_limit))
-    local to_draw = math.min(limit - current_cards, #G.deck.cards)
-
-    if to_draw <= 0 then return end
-
-    for i = 1, to_draw do
-        if (#G.hand.cards + 1) <= limit and #G.deck.cards > 0 then
-            draw_card(G.deck, G.hand, i * 100 / to_draw, nil, nil, nil, 0.07)
-        end
-    end
-
-    if G.hand.sort and G.E_MANAGER and Event then
-        G.E_MANAGER:add_event(Event({
-            func = function()
-                G.hand:sort()
-                return true
-            end
-        }))
     end
 end
 
@@ -257,16 +232,27 @@ local function schedule_smods_delta(delta)
 
                 if not logged_reconcile then
                     local base, permanent, effective, total = get_hand_limit_summary()
+                    local cards_in_hand = (G.hand and G.hand.cards and #G.hand.cards) or 0
+                    local card_count = (h.config and h.config.card_count) or 0
                     log_debug(string.format(
-                        "Applied gift +%d: base=%d, permanent=%d, limit=%d, total_slots=%d",
-                        delta, base or 0, permanent or 0, effective or 0, total or 0
+                        "Applied gift +%d: base=%d, permanent=%d, limit=%d, total_slots=%d, hand_cards=%d, card_count=%d, old_slots=%d, extra_used=%d",
+                        delta,
+                        base or 0,
+                        permanent or 0,
+                        effective or 0,
+                        total or 0,
+                        cards_in_hand,
+                        card_count,
+                        l.old_slots or 0,
+                        l.extra_slots_used or 0
                     ))
                     logged_reconcile = true
                 end
 
                 sync_display_limit()
                 sync_persistent_state()
-                draw_missing_cards(effective_limit)
+
+                -- In SMODS, rely on handle_card_limit auto-draw to avoid overfill.
 
                 -- Mark the slot history as caught up to avoid repeated auto-draws later in SELECTING_HAND.
                 if l.total_slots then
@@ -281,65 +267,70 @@ local function schedule_smods_delta(delta)
     reconcile_once(0.20)
 end
 
--- Show notification when Crimson's Gift is granted
--- Based on Brainstorm-Rerolled's saveManagerAlert() method
-local function crimsonGiftAlert(h_size)
+-- Alert presets for different notification types
+local ALERT_PRESETS = {
+    arriving = {
+        loc_key = "crimson_gift_arriving",
+        delay = 1.0, scale = 0.7, hold = 18,
+        backdrop_colour = {1, 0, 0, 0.5},
+        sound = "other1", sound_pitch = 0.76, sound_volume = 0.4,
+    },
+    applied = {
+        loc_key = "crimson_gift_applied",
+        delay = 1.0, scale = 0.65, hold = 12,
+        backdrop_colour = {0.9, 0.15, 0.15, 0.5},
+        sound = "other1", sound_pitch = 0.75, sound_volume = 0.4,
+    },
+    lost = {
+        loc_key = "crimson_gift_lost",
+        delay = 0.6, scale = 0.7, hold = 10,
+        backdrop_colour = {0.8, 0, 0, 0.35},
+        sound = "cancel", sound_pitch = 0.8, sound_volume = 0.5,
+    },
+    keep_larger = {
+        loc_key = "crimson_gift_keep_larger",
+        delay = 0.6, scale = 0.65, hold = 12,
+        backdrop_colour = {0.8, 0.2, 0.2, 0.4},
+        sound = "other1", sound_pitch = 0.6, sound_volume = 0.35,
+    },
+    keep_largest = {
+        loc_key = "crimson_gift_keep_largest",
+        delay = 0.6, scale = 0.65, hold = 12,
+        backdrop_colour = {0.8, 0.2, 0.2, 0.4},
+        sound = "other1", sound_pitch = 0.6, sound_volume = 0.35,
+    },
+}
+
+-- Unified alert function for all Crimson Gift notifications
+-- @param alert_type: string key from ALERT_PRESETS (arriving, applied, lost, keep_larger, keep_largest)
+-- @param value: optional number for formatted messages (e.g., hand size amount)
+local function show_crimson_alert(alert_type, value)
     if not G or not G.E_MANAGER or not Event then return end
 
-    local text = string.format(localize("crimson_gift_arriving"), h_size)
-    
-    -- Use red color for Crimson Heart theme (with alpha for backdrop)
-    -- Color format: {r, g, b, alpha}
-    local backdrop_colour = {1, 0, 0, 0.5}  -- Red
-    
+    local preset = ALERT_PRESETS[alert_type]
+    if not preset then
+        log("warn", "Unknown alert type: " .. tostring(alert_type))
+        return
+    end
+
+    -- Build text from localization key, with optional value formatting
+    local text
+    if value then
+        text = string.format(localize(preset.loc_key), value)
+    else
+        text = localize(preset.loc_key)
+    end
+
     G.E_MANAGER:add_event(Event({
         trigger = "after",
-        delay = 1.0,  -- Increased delay so notification appears after the disable animation
+        delay = preset.delay,
         func = function()
             attention_text({
                 text = text,
-                scale = 0.7,
-                hold = 18,  -- Longer notification duration
+                scale = preset.scale,
+                hold = preset.hold,
                 major = G.STAGE == G.STAGES.RUN and G.play or G.title_top,
-                backdrop_colour = backdrop_colour,
-                align = "cm",
-                offset = {
-                    x = 0,
-                    y = -2.5,
-                },
-                silent = true,
-            })
-            G.E_MANAGER:add_event(Event({
-                trigger = "after",
-                delay = 0.06 * (G.SETTINGS and G.SETTINGS.GAMESPEED or 1),
-                blockable = false,
-                blocking = false,
-                func = function()
-                    play_sound("other1", 0.76, 0.4)
-                    return true
-                end,
-            }))
-            return true
-        end,
-    }))
-end
-
--- Show notification when a pending gift is lost due to defeating the boss
-local function crimsonGiftLostAlert()
-    if not G or not G.E_MANAGER or not Event then return end
-    local text = localize("crimson_gift_lost")
-    local backdrop_colour = {0.8, 0, 0, 0.35}
-
-    G.E_MANAGER:add_event(Event({
-        trigger = "after",
-        delay = 0.6,
-        func = function()
-            attention_text({
-                text = text,
-                scale = 0.7,
-                hold = 10,
-                major = G.STAGE == G.STAGES.RUN and G.play or G.title_top,
-                backdrop_colour = backdrop_colour,
+                backdrop_colour = preset.backdrop_colour,
                 align = "cm",
                 offset = { x = 0, y = -2.5 },
                 silent = true,
@@ -350,14 +341,16 @@ local function crimsonGiftLostAlert()
                 blockable = false,
                 blocking = false,
                 func = function()
-                    play_sound("cancel", 0.8, 0.5)
+                    play_sound(preset.sound, preset.sound_pitch, preset.sound_volume)
                     return true
                 end,
             }))
             return true
         end,
     }))
+    log_debug(string.format("Alert queued [%s]: %s", alert_type, text))
 end
+
 
 -- Initialize hooks after classes are loaded
 local function init_crimson_gift()
@@ -411,51 +404,54 @@ local function init_crimson_gift()
     end
     
     -- Hook Game:update_hand_played to detect when a hand is completed
-    -- Apply pending increases only if boss is not defeated
+    -- Check if boss was defeated while we have preserved h_size
     local _Game_update_hand_played = Game.update_hand_played
     function Game:update_hand_played(dt)
         local result = _Game_update_hand_played(self, dt)
-        
-        -- Check if hand just completed and we have pending increases
-        -- Only apply if boss is not defeated
-        if CRIMSON_GIFT.pending_hand_size_increase > 0 and G.GAME and G.GAME.blind then
+
+        -- Check if we have preserved h_size and boss was defeated
+        local preserved = CRIMSON_GIFT.preserved_h_size_from_disabled or 0
+        if preserved > 0 and G.GAME and G.GAME.blind then
             local boss_defeated = false
             if G.GAME.blind.boss then
                 boss_defeated = (G.GAME.chips - G.GAME.blind.chips) >= 0
             end
-            local pending_to_apply = CRIMSON_GIFT.pending_hand_size_increase
-            
-            -- Clear pending immediately so older deferred events cannot re-apply it
-            CRIMSON_GIFT.pending_hand_size_increase = 0
-            sync_display_limit()
-            if G.hand and G.hand.children then
-                G.hand.children.crimson_gift_indicator = nil
-            end
-            sync_persistent_state()
-            
-            -- Only apply if boss was NOT defeated
-            if not boss_defeated then
-                if not CRIMSON_GIFT.using_smods then
-                    log("warn", "CrimsonGift: SMODS hand-limit handler inactive after start_run; skipping permanent increase")
-                    return result
+
+            if boss_defeated then
+                local max_excluding_last = CRIMSON_GIFT.max_h_size_excluding_last or 0
+
+                if max_excluding_last > 0 then
+                    -- Multiple h_size jokers were disabled: keep largest excluding last (cumulative)
+                    local current = CRIMSON_GIFT.permanent_hand_size_increase or 0
+                    local new_value = current + max_excluding_last
+
+                    CRIMSON_GIFT.permanent_hand_size_increase = new_value
+                    log_debug(string.format(
+                        "Boss defeated, keeping largest excluding last: +%d (max_excluding_last=%d, permanent=%d -> %d)",
+                        max_excluding_last, max_excluding_last, current, new_value
+                    ))
+                    show_crimson_alert("keep_largest", max_excluding_last)
+
+                    sync_base_tracking()
+                    if G.hand then
+                        schedule_smods_delta(max_excluding_last)
+                    end
+                else
+                    -- Only one h_size joker was disabled: gift lost
+                    log_debug(string.format(
+                        "Boss defeated, gift lost (preserved=%d, no max_excluding_last)",
+                        preserved
+                    ))
+                    show_crimson_alert("lost")
                 end
 
-                CRIMSON_GIFT.permanent_hand_size_increase = CRIMSON_GIFT.permanent_hand_size_increase + pending_to_apply
-                sync_base_tracking()
+                -- Reset state after boss defeat
+                reset_chain_state()
+                sync_display_limit()
                 sync_persistent_state()
-
-                if G.hand then
-                    schedule_smods_delta(pending_to_apply)
-                end
-            else
-                log_debug(string.format(
-                    "Gift lost: boss defeated, pending=%d",
-                    pending_to_apply
-                ))
-                crimsonGiftLostAlert()
             end
         end
-        
+
         return result
     end
     
@@ -463,62 +459,127 @@ local function init_crimson_gift()
     function Blind:drawn_to_hand()
         if self.name == 'Crimson Heart' and self.prepped then
             CRIMSON_GIFT.processing_crimson_heart = true
-            -- Reset tracking at the start of each Crimson Heart cycle
-            CRIMSON_GIFT.last_disabled_h_size = 0
-            CRIMSON_GIFT.processed_jokers_this_cycle = {}  -- Reset processed jokers table
+            -- Reset preserved at cycle start - it should only reflect THIS cycle's disabled jokers
+            -- (Crimson Heart alternates which joker it disables, so we can't accumulate)
+            -- But track max_h_size_excluding_last across cycles for the "keep largest" gift
+            local old_preserved = CRIMSON_GIFT.preserved_h_size_from_disabled or 0
+            if old_preserved > 0 then
+                -- Update max excluding last before resetting
+                CRIMSON_GIFT.max_h_size_excluding_last = math.max(
+                    CRIMSON_GIFT.max_h_size_excluding_last or 0,
+                    old_preserved
+                )
+            end
+            CRIMSON_GIFT.preserved_h_size_from_disabled = 0
         end
-        
+
         local result = _Blind_drawn_to_hand(self)
-        
+
         if self.name == 'Crimson Heart' then
             CRIMSON_GIFT.processing_crimson_heart = false
-            -- Clear processed jokers after cycle completes
-            CRIMSON_GIFT.processed_jokers_this_cycle = {}
         end
-        
+
         return result
     end
     
-    -- Hook Card:remove_from_deck to detect when hand_size jokers are disabled by Crimson Heart
+    -- Hook Card:remove_from_deck to preserve h_size from disabled hand-size jokers
+    -- This prevents hand size from actually dropping during Crimson Heart cycles
     function Card:remove_from_deck(from_debuff)
-        -- Let the normal decrease happen first
-        local result = _Card_remove_from_deck(self, from_debuff)
-        
-        -- Then grant permanent increase if this is a Crimson Heart disable cycle
-        -- Original bug behavior: only grant increase when a hand_size joker is disabled
-        -- AFTER a non-hand_size joker was disabled (not consecutively)
+        -- Capture h_size BEFORE the card is removed
+        local h_size = 0
         if from_debuff and CRIMSON_GIFT.processing_crimson_heart and self.area == G.jokers then
-            -- Use the card object itself as a per-cycle dedupe key.
-            -- This is robust against re-sorting or position changes mid-cycle.
-            local card_key = self
-            local card_name = (self.ability and self.ability.name) or "unknown"
+            h_size = get_card_hand_size(self)
+        end
 
-            if not CRIMSON_GIFT.processed_jokers_this_cycle[card_key] then
-                CRIMSON_GIFT.processed_jokers_this_cycle[card_key] = true
+        -- Let the normal removal happen (card is removed, animation plays)
+        local result = _Card_remove_from_deck(self, from_debuff)
 
-                local h_size = get_card_hand_size(self)
+        -- Preserve h_size so it doesn't actually reduce the hand limit
+        if from_debuff and CRIMSON_GIFT.processing_crimson_heart and self.area == G.jokers then
+            if h_size > 0 then
+                local card_name = (self.ability and self.ability.name) or "unknown"
+                local current_preserved = CRIMSON_GIFT.preserved_h_size_from_disabled or 0
 
-                -- Only grant pending increase if:
-                -- 1. This joker has hand_size > 0
-                -- 2. Last disabled joker had hand_size == 0 (non-hand_size joker) OR this is the first joker disabled
-                if h_size > 0 and CRIMSON_GIFT.last_disabled_h_size == 0 then
-                    CRIMSON_GIFT.pending_hand_size_increase = CRIMSON_GIFT.pending_hand_size_increase + h_size
+                -- Within a single cycle, Crimson Heart only disables one joker at a time
+                -- So just set preserved to this joker's h_size (it was reset at cycle start)
+                -- If somehow multiple are disabled in same cycle, add them
+                CRIMSON_GIFT.preserved_h_size_from_disabled = current_preserved + h_size
 
+                -- Show different alerts based on whether this is the first h_size in the chain
+                if CRIMSON_GIFT.first_h_size_in_chain then
                     log_debug(string.format(
-                        "Hand-size Joker disabled: %s (h_size=%d), pending=%d",
-                        card_name, h_size, CRIMSON_GIFT.pending_hand_size_increase
+                        "First h_size in chain: %s (h_size=%d, preserved=%d)",
+                        card_name,
+                        h_size,
+                        CRIMSON_GIFT.preserved_h_size_from_disabled
                     ))
-
-                    crimsonGiftAlert(h_size)
+                    show_crimson_alert("arriving", h_size)
+                    CRIMSON_GIFT.first_h_size_in_chain = false
+                else
+                    -- Show the max potential gift (current preserved or max from previous cycles)
+                    local max_gift = math.max(
+                        CRIMSON_GIFT.preserved_h_size_from_disabled or 0,
+                        CRIMSON_GIFT.max_h_size_excluding_last or 0
+                    )
+                    log_debug(string.format(
+                        "Keep larger: h_size=%d from %s (preserved=%d, max_excluding_last=%d, max_gift=%d)",
+                        h_size,
+                        card_name,
+                        CRIMSON_GIFT.preserved_h_size_from_disabled,
+                        CRIMSON_GIFT.max_h_size_excluding_last,
+                        max_gift
+                    ))
+                    show_crimson_alert("keep_larger", max_gift)
                 end
 
-                -- Update last disabled joker's hand_size status
-                CRIMSON_GIFT.last_disabled_h_size = h_size
                 sync_display_limit()
                 sync_persistent_state()
+            else
+                -- Non-hand-size joker disabled: finalize and apply the gift immediately
+                local card_name = (self.ability and self.ability.name) or "unknown"
+                local preserved = CRIMSON_GIFT.preserved_h_size_from_disabled or 0
+                local max_excl = CRIMSON_GIFT.max_h_size_excluding_last or 0
+                -- Gift is the max of current cycle's preserved and max from previous cycles
+                local gift_amount = math.max(preserved, max_excl)
+
+                if gift_amount > 0 then
+                    -- Apply gift to permanent (cumulative - each chain adds to total)
+                    local current = CRIMSON_GIFT.permanent_hand_size_increase or 0
+                    local new_value = current + gift_amount
+
+                    CRIMSON_GIFT.permanent_hand_size_increase = new_value
+
+                    log_debug(string.format(
+                        "Chain finalized by %s: applied +%d (gift=%d from preserved=%d/max_excl=%d, permanent=%d -> %d)",
+                        card_name,
+                        gift_amount,
+                        gift_amount,
+                        preserved,
+                        max_excl,
+                        current,
+                        new_value
+                    ))
+
+                    show_crimson_alert("applied", gift_amount)
+
+                    sync_base_tracking()
+                    if G.hand then
+                        schedule_smods_delta(gift_amount)
+                    end
+
+                    -- Reset chain state after gift applied
+                    reset_chain_state()
+                    sync_display_limit()
+                    sync_persistent_state()
+                else
+                    log_debug(string.format(
+                        "Non-hand-size Joker disabled: %s (no preservation to apply)",
+                        card_name
+                    ))
+                end
             end
         end
-        
+
         return result
     end
     
@@ -526,36 +587,75 @@ local function init_crimson_gift()
     if CardArea.handle_card_limit then
         local _CardArea_handle_card_limit = CardArea.handle_card_limit
         function CardArea:handle_card_limit()
-            local result = _CardArea_handle_card_limit(self)
-            
             if self == G.hand and CRIMSON_GIFT.using_smods and self.config.card_limits then
                 sync_base_tracking()
 
                 local limits = self.config.card_limits
-                limits.crimson_gift_mod = CRIMSON_GIFT.permanent_hand_size_increase or 0
+                local gift = CRIMSON_GIFT.permanent_hand_size_increase or 0
+                local preserved = CRIMSON_GIFT.preserved_h_size_from_disabled or 0
 
-                -- Recalculate total_slots to include Crimson Gift's permanent increase
-                limits.total_slots =
-                    (limits.extra_slots or 0) +
-                    (limits.base or 0) +
-                    (limits.mod or 0) +
-                    (limits.crimson_gift_mod or 0)
+                limits.crimson_gift_mod = gift
+
+                -- Temporarily add gift + preserved h_size into mod so SMODS includes both
+                -- Gift: permanent increase being applied
+                -- Preserved: h_size from disabled jokers (keeps hand size stable)
+                local original_mod = limits.mod or 0
+                limits.mod = original_mod + gift + preserved
+
+                local result = _CardArea_handle_card_limit(self)
+
+                -- Restore mod to avoid interfering with other mods' logic.
+                limits.mod = original_mod
 
                 sync_display_limit()
                 sync_persistent_state()
+
+                if CRIMSON_GIFT.config and CRIMSON_GIFT.config.debug_logs then
+                    local total_slots = limits.total_slots or 0
+                    local extra_slots = limits.extra_slots or 0
+                    local base = limits.base or 0
+                    local extra_used = limits.extra_slots_used or 0
+                    local effective = total_slots - extra_used
+                    local cards_in_hand = (self.cards and #self.cards) or 0
+                    local card_count = self.config.card_count or 0
+                    local old_slots = limits.old_slots or 0
+
+                    -- Log only when slot math changes or when an anomaly begins.
+                    local snapshot = string.format("%d|%d|%d", total_slots, old_slots, extra_used)
+                    local prev_snapshot = CRIMSON_GIFT.debug_last.handle_limit_snapshot
+                    local anomaly = cards_in_hand > effective
+                    local was_anomaly = CRIMSON_GIFT.debug_last.handle_limit_anomaly
+
+                    if snapshot ~= prev_snapshot or (anomaly and not was_anomaly) then
+                        CRIMSON_GIFT.debug_last.handle_limit_snapshot = snapshot
+                        CRIMSON_GIFT.debug_last.handle_limit_anomaly = anomaly or nil
+                        log_debug(string.format(
+                            "handle_card_limit: total=%d (base=%d + extra=%d + orig_mod=%d + gift=%d + preserved=%d), hand_cards=%d",
+                            total_slots,
+                            base,
+                            extra_slots,
+                            original_mod,
+                            gift,
+                            preserved,
+                            cards_in_hand
+                        ))
+                    elseif (not anomaly) and was_anomaly then
+                        CRIMSON_GIFT.debug_last.handle_limit_anomaly = nil
+                    end
+                end
+
+                return result
             end
-            
-            return result
+
+            return _CardArea_handle_card_limit(self)
         end
     end
     
     -- Initialize tracking on run start
     function Game:start_run(args)
         CRIMSON_GIFT.permanent_hand_size_increase = 0
+        reset_chain_state()
         CRIMSON_GIFT.processing_crimson_heart = false
-        CRIMSON_GIFT.last_disabled_h_size = 0
-        CRIMSON_GIFT.pending_hand_size_increase = 0
-        CRIMSON_GIFT.processed_jokers_this_cycle = {}
         CRIMSON_GIFT.apply_sequence = 0
 
         local ret = _Game_start_run(self, args)
@@ -574,7 +674,6 @@ local function init_crimson_gift()
             G.hand.config.crimson_gift_original_base = G.GAME.starting_params.hand_size
             sync_base_tracking()
             sync_display_limit()
-
         end
 
         -- Ensure SMODS structures exist for our mod field, if applicable
