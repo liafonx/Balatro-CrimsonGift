@@ -4,3 +4,13 @@ References/
 scripts/
 logs/
 release/
+.agent/
+.agents/
+.claude/
+.codex/
+.cursor/
+docs/knowledge-base.md
+mod.config.json
+INIT.md
+AGENT.md
+docs/

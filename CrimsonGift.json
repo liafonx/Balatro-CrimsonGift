@@ -1,7 +1,7 @@
 {
   "id": "crimson_gift",
-  "name": "Crimson's Gift",
-  "display_name": "Crimson's Gift",
+  "name": "Crimson Gift",
+  "display_name": "Crimson Gift",
   "author": ["Liafonx"],
   "description": "Restores the Crimson Heart hand size bug as an intentional feature.",
   "prefix": "crimson_gift",

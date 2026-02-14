@@ -1,14 +1,16 @@
-# CrimsonGift
+# Crimson Gift
 
 [中文说明](README_zh.md)
 
-**Crimson's Gift** — When Crimson Heart disables a hand-size Joker, your run gains a permanent hand size increase. It is intentional, powerful, and built for endless runs.
+**Crimson Gift** — When Crimson Heart disables a hand-size Joker, your run gains a permanent hand size increase. It is intentional, powerful, and built for endless runs.
 
 ## Why This Mod Exists
 
 SMODS `1.0.0~BETA-1221a` and later fixed the vanilla Crimson Heart hand-size bug. This mod restores that behavior as an intentional, balanced mechanic.
 
 ## How It Works
+
+> **⚠️ Important:** This mod only activates when you encounter **Crimson Heart** boss blind. Without Crimson Heart, the mod does nothing.
 
 - Disabling a hand-size Joker **preserves** the hand size (no drop)
 - When a non-hand-size Joker is disabled, the gift is **applied immediately**
@@ -20,8 +22,7 @@ SMODS `1.0.0~BETA-1221a` and later fixed the vanilla Crimson Heart hand-size bug
 | Scenario | Result |
 |----------|--------|
 | h_size Joker disabled → non-h_size Joker disabled | Gift applied immediately |
-| Single h_size disabled → boss defeated by next play | Gift **lost** |
-| Multiple h_size disabled → boss defeated by next play | Keep **largest** (excluding last) |
+| Boss defeated while gift is pending | Gift **applied** (keeps **largest** of all disabled) |
 
 ## Example
 
@@ -37,12 +38,12 @@ SMODS `1.0.0~BETA-1221a` and later fixed the vanilla Crimson Heart hand-size bug
 
 **Single disable:**
 1. Troubadour (+2) disabled → pending +2
-2. You defeat the boss on this hand → gift **lost**, stays `10/10`
+2. You defeat the boss on this hand → gift +2 **applied**, hand size becomes `12/12`
 
 **Multiple disables:**
 1. Troubadour (+2) disabled → pending +2
-2. Juggler (+1) disabled → pending +1, max_excluding_last = +2
-3. You defeat the boss → keep +2, hand size becomes `12/12`
+2. Juggler (+1) disabled → pending +1, tracking max = +2
+3. You defeat the boss → applies +2 (largest of all), hand size becomes `12/12`
 
 ## Requirements & Compatibility
 
@@ -66,11 +67,10 @@ SMODS `1.0.0~BETA-1221a` and later fixed the vanilla Crimson Heart hand-size bug
 
 | Event | Message |
 |-------|---------|
-| First h_size disabled | "Crimson's Gift is arriving, hand size +N" |
+| First h_size disabled | "Crimson Gift is arriving, hand size +N" |
 | Consecutive h_size disabled | "Consecutive bonuses: keeping hand size +N" |
-| Gift applied | "Crimson's Gift applied, hand size +N" |
-| Boss defeated (single) | "Crimson Heart defeated, gift lost" |
-| Boss defeated (multiple) | "Boss defeated: keeping hand size +N" |
+| Gift applied (non-h_size disabled) | "Crimson Gift applied, hand size +N" |
+| Gift applied (boss defeated) | "Crimson Gift applied, hand size +N" |
 
 ## Strategy Tips
 

@@ -30,15 +30,55 @@ CrimsonGift restores and formalizes the Crimson Heart hand-size interaction: whe
 
 | File | Purpose | Notes |
 |------|---------|-------|
-| `main.lua` | Core logic: hooks, state tracking, h_size preservation, notifications, persistence | SMODS-only, loads `ui.lua` via `SMODS.load_file` |
+| `main.lua` | Entry point & module coordination | Loads modules, initializes mod, coordinates components |
 | `ui.lua` | UI hooks to keep display limits synced | Keeps display values in sync with actual limits |
-| `lovely.toml` | Patches `cardarea.lua` to use CrimsonGift display refs | Targets `crimson_gift_display_limit` + `crimson_gift_display_total_slots` |
+| `lovely.toml` | Patches `cardarea.lua` to use CrimsonGift display refs | Desktop + Mobile iOS patterns (see below) |
 | `CrimsonGift.json` | SMODS mod manifest | Declares SMODS dependency version constraint |
-| `localization/en-us.lua` | English strings | SMODS `handle_loc_file` only |
-| `localization/zh_CN.lua` | Simplified Chinese strings | SMODS `handle_loc_file` only |
+
+### Core Modules (`Core/`)
+
+| File | Purpose | Notes |
+|------|---------|-------|
+| `State.lua` | State persistence and chain tracking | Handles save/restore, chain reset |
+| `HandSize.lua` | Hand limit calculations and SMODS integration | Card h_size extraction, limit tracking, gift application |
+| `Hooks.lua` | Game hook installation | Installs all game event hooks |
+
+### Utility Modules (`Utils/`)
+
+| File | Purpose | Notes |
+|------|---------|-------|
+| `Logger.lua` | Centralized logging | Module-specific loggers, debug mode support |
+| `Notification.lua` | Alert and notification system | Speed-independent UI notifications with styling |
+
+### Localization (`localization/`)
+
+| File | Purpose | Notes |
+|------|---------|-------|
+| `en-us.lua` | English strings | SMODS `handle_loc_file` only |
+| `zh_CN.lua` | Simplified Chinese strings | SMODS `handle_loc_file` only |
+
+### lovely.toml Patches
+
+The `lovely.toml` contains two patches for different platforms:
+
+1. **Desktop**: Matches standard SMODS pattern
+   ```lua
+   {n=G.UIT.T, config={ref_table = self.config.card_limits, ref_value = 'total_slots', ...}}
+   ```
+
+2. **Mobile iOS**: Matches SMODS-aware conditional pattern with `lang` parameter
+   ```lua
+   {n=G.UIT.T, config={ref_table = SMODS and self.config.card_limits or self.config, ref_value = SMODS and 'total_slots' or 'card_limit', ..., lang = G.LANGUAGES['en-us'], ...}}
+   ```
+
+Both patches redirect to `crimson_gift_display_total_slots` for consistent UI display.
 
 ### References/
 All content in `References/` is for development reference only and is **not** part of the mod.
+
+### mod.config.json - Sync Configuration
+
+Use directory patterns for subdirectories: `"localization/***"` (not individual files like `"localization/en-us.lua"`). Rsync needs parent directory included.
 
 ---
 
@@ -61,10 +101,11 @@ The mod uses a **preservation approach** rather than tracking and compensating:
 
 ### Boss Defeat Handling
 
-- **Single h_size joker disabled**: Gift is **lost**, show "lost" alert
-- **Multiple h_size jokers disabled**: Keep largest excluding last, show "keep_largest" alert
+- **Boss defeated with preserved gift**: Gift is **applied** (takes largest of all disabled)
+  - Uses idempotency flag `boss_defeat_processed` to prevent re-triggering on save reloads
+  - Applies `max(preserved, max_h_size_excluding_last)` to get the largest of all disabled h_sizes
+  - Shows "applied" alert with the gift amount
   - The `max_h_size_excluding_last` tracks the maximum h_size from previous cycles
-  - This value is added cumulatively to permanent hand size
 
 ### State Variables
 
@@ -87,15 +128,56 @@ CRIMSON_GIFT.using_smods                   -- SMODS mode flag
 
 ## 4. Notifications
 
+### Notification System (Speed-Independent)
+
+**Architecture:** Persistent UIBox panel (not `attention_text`)
+- **Real-time duration:** Always visible for 3 seconds (not affected by game speed)
+- **Compatible with:** HandySpeed, Speedmaster (works at 1x-999x speed)
+- **Configurable:** Can be disabled via `config.notifications_enabled`
+
+### Unified Styling
+
+All colors/sizes centralized in `NOTIFICATION_STYLE`:
+- `background`, `text_color` - panel styling
+- `highlight_color` - Crimson Heart red for key terms ("Crimson Heart", "绯红之心", "Crimson Gift", "绯红恩赐")
+- `number_color` - Orange (HEX ff9a00) for `+N` numbers
+- `text_scale`, `highlight_scale` - font sizes
+
+`parse_highlighted_text()` scans for patterns, applies appropriate colors/sizes per match type.
+
+### Alert Types
+
 All notifications use the unified `show_crimson_alert(type, value)` function with presets:
 
-| Alert Type | Localization Key | When Shown |
-|------------|------------------|------------|
-| `arriving` | `crimson_gift_arriving` | First h_size joker disabled in chain |
-| `keep_larger` | `crimson_gift_keep_larger` | Subsequent h_size jokers disabled |
-| `applied` | `crimson_gift_applied` | Non-hand-size joker disabled (chain finalized) |
-| `lost` | `crimson_gift_lost` | Boss defeated with single h_size disabled |
-| `keep_largest` | `crimson_gift_keep_largest` | Boss defeated with multiple h_size disabled |
+| Alert Type | Localization Key | When Shown | Duration |
+|------------|------------------|------------|----------|
+| `arriving` | `crimson_gift_arriving` | First h_size joker disabled in chain | 2.5s (real-time) |
+| `keep_larger` | `crimson_gift_keep_larger` | Subsequent h_size jokers disabled | 2.0s (real-time) |
+| `applied` | `crimson_gift_applied` | Non-hand-size joker disabled OR boss defeated | 2.0s (real-time) |
+
+### Implementation Details
+
+**Persistent Panel Components:**
+```lua
+CRIMSON_GIFT.notification_panel = {
+    element = nil,     -- UIBox instance (instance_type="ALERT")
+    timer = 0,         -- Real-time countdown (uses dt from Game:update)
+    duration = 3.0,    -- Default 3 seconds (real-time)
+    message = "",      -- Current notification text
+    colour = {...},    -- Background color from ALERT_PRESETS
+}
+```
+
+**Key Functions:**
+- `parse_highlighted_text(text)` - Parses and highlights key terms/numbers
+- `create_notification_panel_definition()` - Creates UIBox definition with highlighted text
+- `show_notification_panel(text, colour, duration)` - Shows/updates panel
+- `update_notification_panel(dt)` - Updates timer (hooked to `Game:update`)
+
+**Why Not `attention_text`:**
+- `attention_text` uses `hold` parameter in seconds, but gets scaled by game speed
+- At high speeds (32x, 999x), notifications become invisible
+- Persistent panel uses real delta time (dt), unaffected by `G.SETTINGS.GAMESPEED`
 
 ---
 
@@ -121,8 +203,8 @@ Stored fields:
 - Only the mod's localization files are used (no fallback dictionaries)
 
 Localization keys (misc.dictionary):
-- `crimson_gift_arriving` - "Crimson's Gift is arriving, hand size +%d"
-- `crimson_gift_applied` - "Crimson's Gift applied, hand size +%d"
+- `crimson_gift_arriving` - "Crimson Gift is arriving, hand size +%d"
+- `crimson_gift_applied` - "Crimson Gift applied, hand size +%d"
 - `crimson_gift_lost` - "Crimson Heart defeated, gift lost"
 - `crimson_gift_keep_larger` - "Consecutive bonuses: keeping hand size +%d"
 - `crimson_gift_keep_largest` - "Boss defeated: keeping hand size +%d"
@@ -165,13 +247,48 @@ Localization keys (misc.dictionary):
 3. h_size=0 disabled → gift +2 applied, "applied +2"
 
 ### Boss Defeat
-- Single h_size disabled, boss defeated → gift lost
-- Multiple h_size disabled, boss defeated → keep largest excluding last
+- Boss defeated with preserved gift → gift applied (takes largest of all disabled)
+- Uses idempotency flag to prevent re-triggering on save reloads
 
 ---
 
-## 10. Notes for Future Work
+## 10. Common Mistakes & Pitfalls
 
-- If additional UI changes are needed, update `ui.lua` + `lovely.toml` together
-- Alert presets are in `ALERT_PRESETS` table - easy to add new types
-- All state resets should use `reset_chain_state()` helper
+### attention_text `hold` Parameter (CRITICAL)
+
+**MISTAKE:** Assuming `hold` is in frames
+**REALITY:** `hold` is in **SECONDS**
+
+From game source (`UI_definitions.lua:888`):
+```lua
+args.hold = (args.hold or 0) + 0.1*(G.SPEEDFACTOR)
+```
+
+Examples from vanilla code:
+- `hold = 1.4` → 1.4 seconds
+- `hold = 0.3/G.SETTINGS.GAMESPEED` → 0.3 seconds at 1x speed
+
+**Correct usage in CrimsonGift:**
+```lua
+hold = 2.0  -- 2 seconds at 1x speed
+hold = 2.5  -- 2.5 seconds at 1x speed
+```
+
+**Historical error (2026-02-09):**
+- Used `hold = 120` thinking it was frames
+- Actually meant 120 SECONDS = 2 minutes!
+- Notifications stayed visible way too long
+
+**Speed compensation:**
+- Multiply by `game_speed` to maintain real-time duration
+- Example: `hold = 2.0 * 4 = 8.0` at 4x speed → still 2s real-time
+
+---
+
+## 11. Notes for Future Work
+
+- UI changes: update `ui.lua` + `lovely.toml` together
+- Alert presets: add new types to `ALERT_PRESETS` table
+- State resets: use `reset_chain_state()` helper
+- Notification styling: all colors/sizes in `NOTIFICATION_STYLE`; add patterns to `highlight_patterns` in `parse_highlighted_text()`
+- Localization sync: use `localization/***` in `mod.config.json`
