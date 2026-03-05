@@ -5,23 +5,10 @@
 
 local M = {}
 
--- Load modules using SMODS.load_file
-local Logger = (function()
-    local chunk = SMODS.load_file("Utils/Logger.lua")
-    return chunk and chunk() or nil
-end)()
-local Notification = (function()
-    local chunk = SMODS.load_file("Utils/Notification.lua")
-    return chunk and chunk() or nil
-end)()
-local State = (function()
-    local chunk = SMODS.load_file("Core/State.lua")
-    return chunk and chunk() or nil
-end)()
-local HandSize = (function()
-    local chunk = SMODS.load_file("Core/HandSize.lua")
-    return chunk and chunk() or nil
-end)()
+local Logger = CRIMSON_GIFT._modules.Logger
+local Notification = CRIMSON_GIFT._modules.Notification
+local State = CRIMSON_GIFT._modules.State
+local HandSize = CRIMSON_GIFT._modules.HandSize
 
 local log = Logger.create("Hooks")
 
@@ -36,18 +23,6 @@ local _Game_start_run = nil
 --- Check if SMODS is active
 local function is_smods_active()
     return SMODS and CardArea and CardArea.handle_card_limit and SMODS.should_handle_limit
-end
-
---- Load localization
-local function load_localization()
-    if CRIMSON_GIFT.localization_loaded then return end
-    if not (SMODS and SMODS.handle_loc_file and CRIMSON_GIFT.mod and CRIMSON_GIFT.mod.path and CRIMSON_GIFT.mod.id) then
-        return
-    end
-    
-    SMODS.handle_loc_file(CRIMSON_GIFT.mod.path, CRIMSON_GIFT.mod.id)
-    CRIMSON_GIFT.localization_loaded = true
-    log("info", "Localization loaded")
 end
 
 --- Hook: Game:update - Update notification panel timer
@@ -81,10 +56,12 @@ local function hook_game_update_hand_played()
                     local current = CRIMSON_GIFT.permanent_hand_size_increase or 0
                     CRIMSON_GIFT.permanent_hand_size_increase = current + gift_amount
                     
-                    log("debug", string.format(
-                        "Boss defeated, applying gift: +%d (preserved=%d, max_excl=%d, permanent=%d -> %d)",
-                        gift_amount, preserved, max_excl, current, current + gift_amount
-                    ))
+                    if CRIMSON_GIFT.config.debug_logs then
+                        log("debug", string.format(
+                            "Boss defeated, applying gift: +%d (preserved=%d, max_excl=%d, permanent=%d -> %d)",
+                            gift_amount, preserved, max_excl, current, current + gift_amount
+                        ))
+                    end
                     
                     -- Show keep_largest since we're keeping the max of preserved/max_excl
                     Notification.show("keep_largest", gift_amount)
@@ -137,16 +114,19 @@ end
 --- Hook: Card:remove_from_deck - Preserve h_size from disabled jokers
 local function hook_card_remove_from_deck()
     function Card:remove_from_deck(from_debuff)
+        local is_crimson_disable = from_debuff
+            and CRIMSON_GIFT.processing_crimson_heart
+            and self.area == G.jokers
+
         -- Capture h_size BEFORE card is removed
         local h_size = 0
-        if from_debuff and CRIMSON_GIFT.processing_crimson_heart and self.area == G.jokers then
+        if is_crimson_disable then
             h_size = HandSize.from_card(self)
         end
-        
+
         local result = _Card_remove_from_deck(self, from_debuff)
-        
-        -- Preserve h_size to prevent hand limit drop
-        if from_debuff and CRIMSON_GIFT.processing_crimson_heart and self.area == G.jokers then
+
+        if is_crimson_disable then
             if h_size > 0 then
                 -- Hand-size joker disabled: preserve the h_size
                 local card_name = (self.ability and self.ability.name) or "unknown"
@@ -154,10 +134,12 @@ local function hook_card_remove_from_deck()
                 CRIMSON_GIFT.preserved_h_size_from_disabled = current_preserved + h_size
                 
                 if CRIMSON_GIFT.first_h_size_in_chain then
-                    log("debug", string.format(
-                        "First h_size in chain: %s (h_size=%d, preserved=%d)",
-                        card_name, h_size, CRIMSON_GIFT.preserved_h_size_from_disabled
-                    ))
+                    if CRIMSON_GIFT.config.debug_logs then
+                        log("debug", string.format(
+                            "First h_size in chain: %s (h_size=%d, preserved=%d)",
+                            card_name, h_size, CRIMSON_GIFT.preserved_h_size_from_disabled
+                        ))
+                    end
                     Notification.show("arriving", h_size)
                     CRIMSON_GIFT.first_h_size_in_chain = false
                 else
@@ -165,11 +147,13 @@ local function hook_card_remove_from_deck()
                         CRIMSON_GIFT.preserved_h_size_from_disabled or 0,
                         CRIMSON_GIFT.max_h_size_excluding_last or 0
                     )
-                    log("debug", string.format(
-                        "Keep larger: h_size=%d from %s (preserved=%d, max_excl=%d, max_gift=%d)",
-                        h_size, card_name, CRIMSON_GIFT.preserved_h_size_from_disabled,
-                        CRIMSON_GIFT.max_h_size_excluding_last, max_gift
-                    ))
+                    if CRIMSON_GIFT.config.debug_logs then
+                        log("debug", string.format(
+                            "Keep larger: h_size=%d from %s (preserved=%d, max_excl=%d, max_gift=%d)",
+                            h_size, card_name, CRIMSON_GIFT.preserved_h_size_from_disabled,
+                            CRIMSON_GIFT.max_h_size_excluding_last, max_gift
+                        ))
+                    end
                     Notification.show("keep_larger", max_gift)
                 end
                 
@@ -186,11 +170,13 @@ local function hook_card_remove_from_deck()
                     local current = CRIMSON_GIFT.permanent_hand_size_increase or 0
                     CRIMSON_GIFT.permanent_hand_size_increase = current + gift_amount
                     
-                    log("debug", string.format(
-                        "Chain finalized by %s: applied +%d (gift=%d from preserved=%d/max_excl=%d, permanent=%d -> %d)",
-                        card_name, gift_amount, gift_amount, preserved, max_excl, current, current + gift_amount
-                    ))
-                    
+                    if CRIMSON_GIFT.config.debug_logs then
+                        log("debug", string.format(
+                            "Chain finalized by %s: applied +%d (gift=%d from preserved=%d/max_excl=%d, permanent=%d -> %d)",
+                            card_name, gift_amount, gift_amount, preserved, max_excl, current, current + gift_amount
+                        ))
+                    end
+
                     Notification.show("applied", gift_amount)
                     HandSize.sync_base()
                     if G.hand then
@@ -201,7 +187,9 @@ local function hook_card_remove_from_deck()
                     HandSize.sync_display()
                     State.save()
                 else
-                    log("debug", string.format("Non-hand-size joker disabled: %s (no preservation to apply)", card_name))
+                    if CRIMSON_GIFT.config.debug_logs then
+                        log("debug", string.format("Non-hand-size joker disabled: %s (no preservation to apply)", card_name))
+                    end
                 end
             end
         end
@@ -285,7 +273,9 @@ local function hook_game_start_run()
         end
         
         -- Load localization
-        load_localization()
+        if CRIMSON_GIFT._load_localization then
+            CRIMSON_GIFT._load_localization()
+        end
         
         -- Store original hand size base
         if G.hand and G.GAME and G.GAME.starting_params then

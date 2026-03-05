@@ -5,11 +5,7 @@
 
 local M = {}
 
--- Load Logger module
-local Logger = (function()
-    local chunk = SMODS.load_file("Utils/Logger.lua")
-    return chunk and chunk() or nil
-end)()
+local Logger = CRIMSON_GIFT._modules.Logger
 local log = Logger and Logger.create("State") or function() end
 
 --- Initialize state for a new run
@@ -87,8 +83,5 @@ function M.restore()
         CRIMSON_GIFT.permanent_hand_size_increase, 
         CRIMSON_GIFT.preserved_h_size_from_disabled))
 end
-
--- Export save function to global for cross-module access (avoids circular dependency)
-CRIMSON_GIFT._State_save = M.save
 
 return M

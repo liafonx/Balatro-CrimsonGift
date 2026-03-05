@@ -60,11 +60,18 @@ local function load_module(path)
     return chunk()
 end
 
--- Load all modules
+-- Load all modules (order matters: Logger first so _modules is available to later modules)
 local Logger = load_module("Utils/Logger.lua")
+CRIMSON_GIFT._modules = { Logger = Logger }
+
 local Notification = load_module("Utils/Notification.lua")
 local State = load_module("Core/State.lua")
 local HandSize = load_module("Core/HandSize.lua")
+
+CRIMSON_GIFT._modules.Notification = Notification
+CRIMSON_GIFT._modules.State = State
+CRIMSON_GIFT._modules.HandSize = HandSize
+
 local Hooks = load_module("Core/Hooks.lua")
 
 -- ==================================================
@@ -80,6 +87,7 @@ local function load_localization()
     SMODS.handle_loc_file(CRIMSON_GIFT.mod.path, CRIMSON_GIFT.mod.id)
     CRIMSON_GIFT.localization_loaded = true
 end
+CRIMSON_GIFT._load_localization = load_localization
 
 -- ==================================================
 -- UI MODULE
@@ -93,8 +101,12 @@ local function load_ui_module()
     
     local chunk, err = SMODS.load_file("ui.lua")
     if chunk then
-        pcall(chunk)
-        Logger.log("info", "UI module loaded")
+        local ok, exec_err = pcall(chunk)
+        if ok then
+            Logger.log("info", "UI module loaded")
+        else
+            Logger.log("error", "UI module execution failed: " .. tostring(exec_err))
+        end
     else
         Logger.log("error", "UI module load failed: " .. tostring(err))
     end
@@ -154,15 +166,6 @@ local function init_crimson_gift()
     
     -- Load localization
     load_localization()
-    
-    -- Initialize notification system (localize should be available now)
-    Logger.log("debug", "Attempting to initialize notifications, localize available: " .. tostring(localize ~= nil))
-    if localize then
-        Notification.init(CRIMSON_GIFT.config, localize)
-        Logger.log("debug", "Notification.init called")
-    else
-        Logger.log("warning", "localize function not available, notifications may not work")
-    end
     
     -- Install game hooks
     local hooks_installed = Hooks.install()

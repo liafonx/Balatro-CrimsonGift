@@ -5,17 +5,8 @@
 
 local M = {}
 
--- Load Logger module
-local Logger = (function()
-    local chunk = SMODS.load_file("Utils/Logger.lua")
-    return chunk and chunk() or nil
-end)()
+local Logger = CRIMSON_GIFT._modules.Logger
 local log = Logger and Logger.create("HandSize") or function() end
-
---- Check if SMODS hand limit system is active
-local function is_smods_active()
-    return SMODS and CardArea and CardArea.handle_card_limit and SMODS.should_handle_limit
-end
 
 --- Get card's hand size contribution
 -- @param card table: Card to check
@@ -39,16 +30,12 @@ function M.get_summary()
         or 0
     local permanent = CRIMSON_GIFT.permanent_hand_size_increase or 0
     
-    if G.hand.config.card_limits then
-        local limits = G.hand.config.card_limits
-        local total = limits.total_slots
-            or (limits.extra_slots or 0) + (limits.base or 0) + (limits.mod or 0) + (limits.crimson_gift_mod or 0)
-        local effective = total - (limits.extra_slots_used or 0)
-        return base, permanent, effective, total
-    end
-    
-    local limit = G.hand.config.card_limit or G.hand.config.real_card_limit or 0
-    return base, permanent, limit, limit
+    local limits = G.hand.config.card_limits
+    if not limits then return nil end
+    local total = limits.total_slots
+        or (limits.extra_slots or 0) + (limits.base or 0) + (limits.mod or 0) + (limits.crimson_gift_mod or 0)
+    local effective = total - (limits.extra_slots_used or 0)
+    return base, permanent, effective, total
 end
 
 --- Sync base tracking (ensure original base is stored)
@@ -64,19 +51,15 @@ end
 function M.sync_display()
     if not (G and G.hand and G.hand.config) then return end
     
-    if G.hand.config.card_limits then
-        local limits = G.hand.config.card_limits
-        local total_slots = limits.total_slots
-            or (limits.extra_slots or 0) + (limits.base or 0) + (limits.mod or 0) + (limits.crimson_gift_mod or 0)
-        local effective_limit = total_slots - (limits.extra_slots_used or 0)
-        
-        -- Display refs equal real values (no compensation needed)
-        limits.crimson_gift_display_total_slots = total_slots
-        G.hand.config.crimson_gift_display_limit = effective_limit
-    else
-        local limit = G.hand.config.card_limit or G.hand.config.real_card_limit or 0
-        G.hand.config.crimson_gift_display_limit = limit
-    end
+    local limits = G.hand.config.card_limits
+    if not limits then return end
+    local total_slots = limits.total_slots
+        or (limits.extra_slots or 0) + (limits.base or 0) + (limits.mod or 0) + (limits.crimson_gift_mod or 0)
+    local effective_limit = total_slots - (limits.extra_slots_used or 0)
+
+    -- Display refs equal real values (no compensation needed)
+    limits.crimson_gift_display_total_slots = total_slots
+    G.hand.config.crimson_gift_display_limit = effective_limit
 end
 
 --- Apply permanent gift increase (SMODS integration)
@@ -152,10 +135,8 @@ function M.apply_gift(delta)
                 
                 M.sync_display()
                 
-                -- Persist state (call via global to avoid circular dependency)
-                if CRIMSON_GIFT and CRIMSON_GIFT._State_save then
-                    CRIMSON_GIFT._State_save()
-                end
+                -- Persist state
+                CRIMSON_GIFT._modules.State.save()
                 
                 -- Mark slot history as caught up
                 if l.total_slots then

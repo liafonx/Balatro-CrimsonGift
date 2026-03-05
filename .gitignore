@@ -4,6 +4,7 @@ References/
 scripts/
 logs/
 release/
+.tmp/
 .agent/
 .agents/
 .claude/

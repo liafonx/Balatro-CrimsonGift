@@ -5,12 +5,7 @@
 
 local M = {}
 
--- Load Logger module
-local Logger = (function()
-    local chunk = SMODS.load_file("Utils/Logger.lua")
-    return chunk and chunk() or nil
-end)()
--- Logger.create returns a function(level, msg), so fallback must match
+local Logger = CRIMSON_GIFT._modules.Logger
 local log = Logger and Logger.create("Notification") or function(level, msg) end
 
 -- Module state
@@ -21,10 +16,6 @@ local panel = {
     message = "",
     colour = {1, 0, 0, 0.5},
 }
-
--- Configuration (will be set during init)
-local config = nil
-local localize_fn = nil
 
 -- Notification styling
 local STYLE = {
@@ -112,19 +103,19 @@ local function create_text_node(text, is_highlighted, is_number)
     }
 end
 
+-- Patterns to highlight (hoisted to module scope — never changes)
+local HIGHLIGHT_PATTERNS = {
+    {pattern = "%+%d+", is_number = true},         -- +N numbers
+    {pattern = "绯红之心", is_number = false},       -- Crimson Heart (Chinese)
+    {pattern = "绯红恩赐", is_number = false},       -- Crimson Gift (Chinese)
+    {pattern = "Crimson Heart", is_number = false},
+    {pattern = "Crimson Gift", is_number = false},
+}
+
 --- Parse text and highlight key terms/numbers
 local function parse_highlighted_text(text)
     local nodes = {}
     local remaining = text
-    
-    -- Patterns to highlight
-    local highlight_patterns = {
-        {pattern = "%+%d+", is_number = true},         -- +N numbers
-        {pattern = "绯红之心", is_number = false},       -- Crimson Heart (Chinese)
-        {pattern = "绯红恩赐", is_number = false},       -- Crimson Gift (Chinese)
-        {pattern = "Crimson Heart", is_number = false},
-        {pattern = "Crimson Gift", is_number = false},
-    }
     
     while remaining and remaining ~= "" do
         local earliest_pos = nil
@@ -132,7 +123,7 @@ local function parse_highlighted_text(text)
         local earliest_pattern = nil
         
         -- Find earliest match
-        for _, p in ipairs(highlight_patterns) do
+        for _, p in ipairs(HIGHLIGHT_PATTERNS) do
             local start_pos, end_pos = remaining:find(p.pattern)
             if start_pos and (not earliest_pos or start_pos < earliest_pos) then
                 earliest_pos = start_pos
@@ -221,11 +212,7 @@ local function show_panel(text, colour, duration)
 end
 
 --- Initialize notification system
--- @param mod_config table: Mod configuration (for notifications_enabled check)
--- @param localize_func function: Localization function
-function M.init(mod_config, localize_func)
-    config = mod_config
-    localize_fn = localize_func
+function M.init()
     log("info", "Notification system initialized")
 end
 
@@ -237,8 +224,10 @@ function M.show(alert_type, value)
     local current_config = CRIMSON_GIFT and CRIMSON_GIFT.config
     local enabled = current_config and current_config.notifications_enabled
     
-    log("debug", string.format("show() called: alert_type=%s, value=%s, config=%s, enabled=%s", 
-        tostring(alert_type), tostring(value), tostring(current_config ~= nil), tostring(enabled)))
+    if CRIMSON_GIFT.config.debug_logs then
+        log("debug", string.format("show() called: alert_type=%s, value=%s, config=%s, enabled=%s",
+            tostring(alert_type), tostring(value), tostring(current_config ~= nil), tostring(enabled)))
+    end
     
     -- Check if notifications enabled
     if not enabled then
@@ -284,7 +273,9 @@ function M.show(alert_type, value)
         end,
     }))
     
-    log("debug", string.format("Alert queued [%s]: %s", alert_type, text))
+    if CRIMSON_GIFT.config.debug_logs then
+        log("debug", string.format("Alert queued [%s]: %s", alert_type, text))
+    end
 end
 
 --- Update notification panel timer (call from Game:update hook)

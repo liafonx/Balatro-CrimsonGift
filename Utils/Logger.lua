@@ -42,6 +42,19 @@ local function should_log(level)
     return false
 end
 
+--- Format a log message string
+local function format_message(module_name, level, msg)
+    local parts = {M._prefix}
+    if module_name and module_name ~= "" then
+        parts[#parts + 1] = "[" .. module_name .. "]"
+    end
+    if level and level ~= "" then
+        parts[#parts + 1] = "[" .. tostring(level) .. "]"
+    end
+    parts[#parts + 1] = " " .. tostring(msg)
+    return table.concat(parts)
+end
+
 --- Create a logger for a specific module
 -- @param module_name string: Name of the module (e.g., "State", "HandSize", "Hooks")
 -- @return function: A log(level, msg) function for that module
@@ -50,25 +63,8 @@ end
 --   - info/debug: Only visible when debug mode config is enabled
 function M.create(module_name)
     return function(level, msg)
-        -- Check if we should log this level
-        if not should_log(level) then
-            return
-        end
-
-        -- Format message
-        local full_msg
-        if module_name and module_name ~= "" then
-            if level and level ~= "" then
-                full_msg = M._prefix .. "[" .. module_name .. "][" .. tostring(level) .. "] " .. tostring(msg)
-            else
-                full_msg = M._prefix .. "[" .. module_name .. "] " .. tostring(msg)
-            end
-        else
-            full_msg = M._prefix .. " " .. tostring(msg)
-        end
-
-        -- Protected print (prevents crash if another mod has buggy print hook)
-        pcall(print, full_msg)
+        if not should_log(level) then return end
+        pcall(print, format_message(module_name, level, msg))
     end
 end
 
@@ -76,18 +72,8 @@ end
 -- @param level string: Log level ("error", "warning", "info", or "debug")
 -- @param msg string: Log message
 function M.log(level, msg)
-    if not should_log(level) then
-        return
-    end
-
-    local full_msg
-    if level and level ~= "" then
-        full_msg = M._prefix .. "[" .. tostring(level) .. "] " .. tostring(msg)
-    else
-        full_msg = M._prefix .. " " .. tostring(msg)
-    end
-
-    pcall(print, full_msg)
+    if not should_log(level) then return end
+    pcall(print, format_message(nil, level, msg))
 end
 
 return M
